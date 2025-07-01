@@ -5,4 +5,6 @@ supabase==1.0.3
 pandas==2.1.4
 pyecharts==2.0.4
 httpx==0.23.3
-gotrue==1.0.4 
+gotrue==1.0.4
+shiny
+shinywidgets 
