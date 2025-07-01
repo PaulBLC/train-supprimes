@@ -3,6 +3,9 @@ import requests
 import csv
 from supabase import create_client
 from dotenv import load_dotenv
+import folium
+import pandas as pd
+from shiny import ui as shin_ui
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -12,7 +15,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Paramètres
 API_URL = "https://www.data.gouv.fr/api/1/datasets/641b456a5374b1bdc9dce4cf/"
-ANNEE = "2023"
+ANNEE = "2024"
 MOIS_LIST = [f"{ANNEE}{str(m).zfill(2)}" for m in range(1, 13)] 
 
 def get_csv_urls(api_url, mois):

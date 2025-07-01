@@ -1,18 +1,16 @@
 # Dashboard Trains Supprimés V2
 
-Version simplifiée du dashboard des trains supprimés SNCF avec FastAPI, HTML/CSS/JS et pyecharts.
+Version basée sur Shiny pour Python pour la visualisation interactive des trains supprimés SNCF. Plus de HTML/CSS/JS ni FastAPI : tout est géré via Shiny et Python.
 
 ## Structure du projet
 
 ```
 TRAIN-DASHBOARD-V2/
-├── app.py              # Backend FastAPI
-├── static/
-│   ├── index.html      # Page principale
-│   ├── style.css       # Styles CSS
-│   └── script.js       # JavaScript
-├── requirements.txt    # Dépendances Python
-└── README.md          # Ce fichier
+├── shiny_app.py             # Application Shiny pour visualisation interactive
+├── import_and_clean_csv.py  # Script d'import et nettoyage des CSV
+├── requirements.txt         # Dépendances Python
+├── schema.sql               # Schéma SQL Supabase
+└── README.md                # Ce fichier
 ```
 
 ## Installation
@@ -27,34 +25,38 @@ Créer un fichier `.env` avec :
 ```
 SUPABASE_URL=your_supabase_url_here
 SUPABASE_KEY=your_supabase_anon_key_here
+user=...         # identifiants PostgreSQL si besoin
+password=...
+host=...
+port=...
+dbname=...
 ```
 
-3. **Lancer l'application :**
+3. **Importer les données dans Supabase :**
 ```bash
-python app.py
+python import_and_clean_csv.py
 ```
 
-4. **Accéder au dashboard :**
-Ouvrir http://localhost:8000 dans votre navigateur
+4. **Lancer l'application Shiny :**
+```bash
+shiny run --reload shiny_app.py
+```
+
+5. **Accéder au dashboard :**
+- Shiny : http://localhost:8000 (ou port indiqué par Shiny)
 
 ## Fonctionnalités
 
 - ✅ Tableau des trains supprimés avec pagination
 - ✅ Statistiques en temps réel
-- ✅ Interface responsive
-- ✅ Auto-refresh des données
+- ✅ Interface interactive Shiny
 - ✅ Connexion Supabase
-
-## API Endpoints
-
-- `GET /` - Page d'accueil
-- `GET /api/trains` - Données des trains (avec pagination)
-- `GET /api/stats` - Statistiques
-- `GET /api/health` - Santé de l'API
+- ✅ Visualisations pyecharts intégrées
+- ✅ Carte interactive (Folium)
 
 ## Prochaines étapes
 
-- [ ] Ajouter des graphiques avec pyecharts
-- [ ] Filtres par date/gare
+- [ ] Filtres avancés
 - [ ] Export des données
-- [ ] Carte de France avec heatmap 
+- [ ] Amélioration de la carte
+- [ ] Automatisation de l'import quotidien 
