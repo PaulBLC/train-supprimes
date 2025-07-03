@@ -1,4 +1,6 @@
 # Dashboard des trains supprimés
+![image](https://github.com/user-attachments/assets/063508b2-163a-4dc7-a5be-98e47249519c)
+
 
 Ce projet propose un dashboard interactif pour visualiser les suppressions de trains en France, construit avec [Shiny pour Python](https://shiny.posit.co/py/).
 
