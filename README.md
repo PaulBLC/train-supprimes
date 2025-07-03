@@ -16,7 +16,10 @@ Ce projet propose un dashboard interactif pour visualiser les suppressions de tr
 - ✅ Cartographie interactive (pyecharts + GeoJSON)
 
 ## Mise à jour automatique des données
-Les données sont automatiquement mises à jour chaque jour grâce à un workflow [n8n](https://n8n.io/) qui collecte et injecte les nouvelles données dans la base PostgreSQL. Vous n'avez rien à faire, le dashboard affiche toujours les données les plus récentes.
+Les données sont automatiquement mises à jour chaque jour grâce à un workflow [n8n](https://n8n.io/) qui collecte et injecte les nouvelles données dans la base PostgreSQL.
+
+![image](https://github.com/user-attachments/assets/dca503d3-0b99-4b84-a3ba-2f75287b58fa)
+
 
 ## Prérequis
 - Python >= 3.10
