@@ -1,11 +1,7 @@
-fastapi==0.104.1      # Backend API
-uvicorn==0.24.0       # Serveur ASGI pour FastAPI
-python-dotenv==1.0.0  # Gestion des variables d'environnement
-supabase==1.0.3       # Client Supabase
-pandas==2.1.4         # Manipulation de données
-pyecharts==2.0.4      # Graphiques interactifs
-httpx==0.23.3         # Requêtes HTTP asynchrones
-shiny                 # Application Shiny pour Python
-shinywidgets          # Widgets pour Shiny
-psycopg2              # Connecteur PostgreSQL
-# gotrue est inclus via supabase, peut être retiré si non utilisé directement
+python-dotenv==1.0.0      # Gestion des variables d'environnement
+supabase==1.0.3           # Client Supabase
+pandas==2.1.4             # Manipulation de données
+pyecharts==2.0.4          # Graphiques interactifs
+shiny==1.2.0              # Application Shiny pour Python
+psycopg2-binary==2.9.9    # Connecteur PostgreSQL
+faicons==0.2.2            # Icônes Font Awesome pour Shiny

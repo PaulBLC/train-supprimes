@@ -3,25 +3,28 @@ __pycache__/
 *.py[cod]
 *.so
 .Python
+
+# Environnements virtuels
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 
-# Environnement
+# Variables d'environnement
 .env
 .env.*
 
-# Données temporaires
+# Données temporaires et exports
 *.csv
 *.xlsx
 *.json
 *.log
+*.pdf
 
 # Build/IDE
-dist/
-build/
+/dist/
+/build/
 *.egg-info/
 .vscode/
 .idea/
@@ -33,4 +36,14 @@ build/
 Thumbs.db
 
 # Supabase (si jamais tu utilises le CLI)
-.supabase/ 
+.supabase/
+
+# Docker
+*.pid
+*.sock
+docker-compose.override.yml
+Dockerfile*
+train-dashboard/
+
+# Autres
+node_modules/ 

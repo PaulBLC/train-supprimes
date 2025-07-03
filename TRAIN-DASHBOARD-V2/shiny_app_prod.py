@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import pandas as pd
 import json
 from shiny import App, ui, reactive, render
@@ -24,7 +26,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 # Initialisation Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Chargement des données ---
+# --- Chargement des donnÃ©es ---
 def load_data():
     try:
         connection = psycopg2.connect(
@@ -57,12 +59,12 @@ def load_data():
 TYPE_TRAIN_COURT = {
     "highSpeedRail:FERRE": "TGV",
     "international:FERRE": "International",
-    "longDistance:FERRE": "Intercité GL",
-    "interregionalRail:FERRE": "Intercité IR",
+    "longDistance:FERRE": "IntercitÃ© GL",
+    "interregionalRail:FERRE": "IntercitÃ© IR",
     "regionalRail:FERRE": "TER",
     "railShuttle:FERRE": "Navette",
     "tramTrain:FERRE": "Tram train",
-    "regionalCoach:ROUTIER": "Car régional",
+    "regionalCoach:ROUTIER": "Car rÃ©gional",
     "shuttleCoach:ROUTIER": "Navette bus",
     ":ROUTIER": "Car LD"
 }
@@ -75,7 +77,7 @@ app_ui = ui.page_sidebar(
     ui.sidebar(
         ui.navset_pill(
             ui.nav_panel("Dashboard", value="dashboard"),
-            ui.nav_panel("Données", value="donnees"),
+            ui.nav_panel("DonnÃ©es", value="donnees"),
             id="nav"
         ),
         ui.input_select(
@@ -83,7 +85,7 @@ app_ui = ui.page_sidebar(
             choices={"": "Tous"} | {t: t for t in sorted(data['type_court'].dropna().unique())}
         ),
         ui.input_date_range(
-            "date_range", "Période",
+            "date_range", "PÃ©riode",
             start=pd.Timestamp.today(),
             end=pd.Timestamp.today(),
             format="dd/mm/yyyy",
@@ -132,15 +134,12 @@ app_ui = ui.page_sidebar(
             padding: 18px 18px 10px 18px;
             margin-bottom: 18px;
         }
-        body {
-            font-family: 'Segoe UI Emoji', 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI', Arial, sans-serif;
-        }
         """),
         ui.output_ui("special_day_buttons"),
         ui.output_ui("year_buttons"),
         ui.div(
             ui.a(
-                "Source des données : data.gouv.fr",
+                "Source des donnÃ©es : data.gouv.fr",
                 href="https://www.data.gouv.fr/fr/datasets/641b456a5374b1bdc9dce4cf",
                 target="_blank",
                 style="font-size: 0.85em; color: #888; text-decoration: underline; display: block; margin-top: 30px; text-align: center;"
@@ -156,15 +155,12 @@ app_ui = ui.page_sidebar(
         width="280px"
     ),
     ui.output_ui("main_content"),
-    title=ui.TagList(
-        ui.tags.i(class_="fas fa-train", style="margin-right:8px;"),
-        "Dashboard des trains supprimés"
-    )
+    title="Dashboard des trains supprimÃ©s"
 )
 
 # --- Serveur ---
 def server(input, output, session):
-    # Initialisation : sélectionne "Aujourd'hui" au lancement
+    # Initialisation : sÃ©lectionne "Aujourd'hui" au lancement
     selected_year = reactive.Value("today")
     today = pd.Timestamp.today().strftime('%Y-%m-%d')
     tomorrow = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
@@ -186,7 +182,7 @@ def server(input, output, session):
             df = df[df['type_court'] == input.type()]
         # Filtre dates
         start, end = input.date_range()
-        # Si aucune date sélectionnée, on prend 2024-01-01 à aujourd'hui
+        # Si aucune date sÃ©lectionnÃ©e, on prend 2024-01-01 Ã  aujourd'hui
         if not start or not end:
             start = pd.Timestamp("2024-01-01")
             end = pd.Timestamp.today()
@@ -199,18 +195,18 @@ def server(input, output, session):
     def filtered_table():
         df = filtered_data()
 
-        # Renommage et réordonnancement
+        # Renommage et rÃ©ordonnancement
         table = (
             df.rename(columns={
                 'type_court': 'Type',
-                'headsign': 'N° Train',
+                'headsign': 'NÂ° Train',
                 'departure_date_fmt': 'Date',
-                'departure': 'Départ',
-                'arrival': 'Arrivée',
-                'departure_time_fmt': 'Heure Dép.',
+                'departure': 'DÃ©part',
+                'arrival': 'ArrivÃ©e',
+                'departure_time_fmt': 'Heure DÃ©p.',
                 'arrival_time_fmt': 'Heure Arr.'
             })[
-                ['Type', 'N° Train', 'Date', 'Départ', 'Arrivée', 'Heure Dép.', 'Heure Arr.']
+                ['Type', 'NÂ° Train', 'Date', 'DÃ©part', 'ArrivÃ©e', 'Heure DÃ©p.', 'Heure Arr.']
             ]
         )
 
@@ -238,10 +234,10 @@ def server(input, output, session):
         from shiny import ui as shin_ui
         df = filtered_data()
         if df.empty:
-            return shin_ui.tags.div("Aucune donnée à afficher pour cette période", style="color:#888; padding:1rem;")
+            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
         counts = df['type_court'].value_counts()
         if counts.empty:
-            return shin_ui.tags.div("Aucune donnée à afficher pour cette période", style="color:#888; padding:1rem;")
+            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
         bar = (
             Bar(init_opts=opts.InitOpts(width="100%", height="375px"))
             .add_xaxis(counts.index.tolist())
@@ -262,7 +258,7 @@ def server(input, output, session):
     def map_france():
         df = filtered_data()
         if df.empty:
-            return ui.tags.div("Aucune donnée à afficher", style="color:#888; padding:1rem;")
+            return ui.tags.div("Aucune donnÃ©e Ã  afficher", style="color:#888; padding:1rem;")
         coords = df['position_geographique'].str.split(',', expand=True).astype(float)
         df['lat'], df['lon'] = coords[0], coords[1]
         data_map = (
@@ -303,11 +299,11 @@ def server(input, output, session):
         from shiny import ui as shin_ui
         df = filtered_data()
         if df.empty:
-            return shin_ui.tags.div("Aucune donnée à afficher pour cette période", style="color:#888; padding:1rem;")
+            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
         # Grouper par mois
         monthly = df.groupby(df['departure_date_dt'].dt.to_period('M')).size().reset_index(name='count')
         if monthly.empty:
-            return shin_ui.tags.div("Aucune donnée à afficher pour cette période", style="color:#888; padding:1rem;")
+            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
         monthly['month'] = monthly['departure_date_dt'].dt.strftime('%m/%Y')
         from pyecharts.charts import Line
         from pyecharts import options as opts
@@ -316,7 +312,7 @@ def server(input, output, session):
             .add_xaxis(monthly['month'].tolist())
             .add_yaxis("Suppressions", monthly['count'].tolist())
             .set_global_opts(
-                title_opts=opts.TitleOpts(title="Évolution mensuelle"),
+                title_opts=opts.TitleOpts(title="Ã‰volution mensuelle"),
                 xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=45)),
                 tooltip_opts=opts.TooltipOpts(trigger="axis"),
                 legend_opts=opts.LegendOpts(
@@ -335,11 +331,11 @@ def server(input, output, session):
         from shiny import ui as shin_ui
         df = filtered_data()
         if df.empty or 'departure_time_fmt' not in df.columns:
-            return shin_ui.tags.div("Aucune donnée à afficher pour cette période", style="color:#888; padding:1rem;")
+            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
         df['heure'] = pd.to_datetime(df['departure_time_fmt'], format='%H:%M', errors='coerce').dt.hour
         counts = df['heure'].value_counts().sort_index()
         if counts.empty:
-            return shin_ui.tags.div("Aucune donnée à afficher pour cette période", style="color:#888; padding:1rem;")
+            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
         from pyecharts.charts import Bar
         from pyecharts import options as opts
         bar = (
@@ -363,7 +359,7 @@ def server(input, output, session):
         df = filtered_data()
         count = df.shape[0]
         return ui.value_box(
-            "Trains supprimés",
+            "Trains supprimÃ©s",
             f"{count}",
             showcase=icon_svg("train")
         )
@@ -380,7 +376,7 @@ def server(input, output, session):
             nb = df['departure'].value_counts().max()
             gare = f"{top} ({nb})"
         return ui.value_box(
-            "Gare la plus impactée",
+            "Gare la plus impactÃ©e",
             gare,
             showcase=icon_svg("location-dot")
         )
@@ -392,7 +388,7 @@ def server(input, output, session):
         count = df.shape[0]
         taux = round(100 * count / 15000, 2)
         return ui.value_box(
-            "% trains supprimés",
+            "% trains supprimÃ©s",
             f"{taux} %",
             showcase=icon_svg("percent")
         )
@@ -404,7 +400,7 @@ def server(input, output, session):
         df = filtered_data()
         count = df.shape[0]
         return ui.value_box(
-            "Trains supprimés",
+            "Trains supprimÃ©s",
             f"{count}",
             showcase=icon_svg("train")
         )
@@ -463,14 +459,14 @@ def server(input, output, session):
         table = (
             df.rename(columns={
                 'type_court': 'Type',
-                'headsign': 'N° Train',
+                'headsign': 'NÂ° Train',
                 'departure_date_fmt': 'Date',
-                'departure': 'Départ',
-                'arrival': 'Arrivée',
-                'departure_time_fmt': 'Heure Dép.',
+                'departure': 'DÃ©part',
+                'arrival': 'ArrivÃ©e',
+                'departure_time_fmt': 'Heure DÃ©p.',
                 'arrival_time_fmt': 'Heure Arr.'
             })[
-                ['Type', 'N° Train', 'Date', 'Départ', 'Arrivée', 'Heure Dép.', 'Heure Arr.']
+                ['Type', 'NÂ° Train', 'Date', 'DÃ©part', 'ArrivÃ©e', 'Heure DÃ©p.', 'Heure Arr.']
             ]
         )
         return render.DataTable(
@@ -497,10 +493,10 @@ def server(input, output, session):
         from shiny import ui as shin_ui
         df = filtered_data()
         if df.empty:
-            return shin_ui.tags.div("Aucune donnée à afficher pour cette période", style="color:#888; padding:1rem;")
+            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
         top = df['departure'].value_counts().head(10)
         if top.empty:
-            return shin_ui.tags.div("Aucune donnée à afficher pour cette période", style="color:#888; padding:1rem;")
+            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
         pie = (
             Pie(init_opts=opts.InitOpts(width="100%", height="375px"))
             .add(
@@ -509,7 +505,7 @@ def server(input, output, session):
                 radius=["40%", "70%"],
             )
             .set_global_opts(
-                title_opts=opts.TitleOpts(title="Top 10 gares de départ"),
+                title_opts=opts.TitleOpts(title="Top 10 gares de dÃ©part"),
                 legend_opts=opts.LegendOpts(
                     orient="vertical",
                     pos_top="top",
@@ -564,7 +560,7 @@ def server(input, output, session):
         elif nav == "donnees":
             return ui.div(
                 ui.div(
-                    ui.h3("Tableau filtré", style="display:inline-block; vertical-align:middle; margin-right:18px; margin-bottom:0;"),
+                    ui.h3("Tableau filtrÃ©", style="display:inline-block; vertical-align:middle; margin-right:18px; margin-bottom:0;"),
                     ui.download_button("download_csv", "CSV", class_="btn-year", style="margin-right:10px; display:inline-block; vertical-align:middle;"),
                     style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;"
                 ),
@@ -577,7 +573,7 @@ def server(input, output, session):
     @output
     @render.ui
     def special_day_buttons():
-        # Désactive "Demain" si la date max de la BDD < demain
+        # DÃ©sactive "Demain" si la date max de la BDD < demain
         demain_disabled = pd.to_datetime(date_max) < pd.to_datetime(tomorrow)
         return ui.div(
             *[
@@ -587,7 +583,7 @@ def server(input, output, session):
                     class_="btn-year" + (" btn-year-active" if selected_year.get() == key else "") + (" btn-year-disabled" if key == "tomorrow" and demain_disabled else ""),
                     style="margin:2px;",
                     disabled=demain_disabled if key == "tomorrow" else False,
-                    title="Aucune donnée pour demain" if key == "tomorrow" and demain_disabled else ""
+                    title="Aucune donnÃ©e pour demain" if key == "tomorrow" and demain_disabled else ""
                 )
                 for key, label in special_days
             ],
@@ -610,7 +606,7 @@ def server(input, output, session):
             class_="btn-row"
         )
 
-    # Observers pour les boutons année
+    # Observers pour les boutons annÃ©e
     def make_year_observer(year):
         @reactive.Effect
         @reactive.event(input[f"year_{year}"])
@@ -631,7 +627,7 @@ def server(input, output, session):
     for year in sorted(data['departure_date_dt'].dt.year.unique()):
         make_year_observer(year)
 
-    # Observers pour les boutons spéciaux
+    # Observers pour les boutons spÃ©ciaux
     @reactive.Effect
     @reactive.event(input.special_today)
     def _():
@@ -661,7 +657,7 @@ def server(input, output, session):
     def download_csv():
         df = filtered_data()
         buf = io.BytesIO()
-        # Ajout du BOM UTF-8 pour compatibilité Excel et accents
+        # Ajout du BOM UTF-8 pour compatibilitÃ© Excel et accents
         csv_data = df.to_csv(index=False, sep=";", encoding="utf-8-sig")
         buf.write(csv_data.encode("utf-8-sig"))
         buf.seek(0)
@@ -670,4 +666,4 @@ def server(input, output, session):
 app = App(app_ui, server)
 
 if __name__ == '__main__':
-    app.run(port=8001)
+    app.run(host="0.0.0.0", port=8001)
