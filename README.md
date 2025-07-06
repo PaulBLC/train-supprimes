@@ -179,7 +179,4 @@ docker compose up -d --build
   ```bash
   docker compose up -d --force-recreate <service>
   ```
-
-> Gardez cette cheatsheet à portée de main : elle couvre 80 % des opérations quotidiennes pour piloter votre stack Docker !
-
 ---
