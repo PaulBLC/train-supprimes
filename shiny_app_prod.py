@@ -2,501 +2,327 @@
 
 import pandas as pd
 import json
-from shiny import App, ui, reactive, render
+import time
+import io
+import os
+
+import psycopg2
 from pyecharts.charts import Bar, Line, Pie, Geo
 from pyecharts import options as opts
 from pyecharts.globals import CurrentConfig, NotebookType
+from shiny import App, ui, reactive, render
 from dotenv import load_dotenv
-from supabase import create_client, Client
-import os
-import psycopg2
-import io
 from faicons import icon_svg
+import shinyswatch
 
-# Configurer pyecharts pour afficher dans un iframe HTML
 CurrentConfig.NOTEBOOK_TYPE = NotebookType.JUPYTER_LAB
 
-# Chargement des variables d'environnement
+# ── Configuration ─────────────────────────────────────────────────────
+
 load_dotenv()
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("SUPABASE_URL et SUPABASE_KEY sont requis")
 
-# Initialisation Supabase
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+CACHE_TTL = 300
+DAILY_TRAIN_ESTIMATE = 15_000
 
-# --- Chargement des donnÃ©es ---
-def load_data():
+TYPE_TRAIN_COURT = {
+    "highSpeedRail:FERRE": "TGV",
+    "international:FERRE": "International",
+    "longDistance:FERRE": "Intercité GL",
+    "interregionalRail:FERRE": "Intercité IR",
+    "regionalRail:FERRE": "TER",
+    "railShuttle:FERRE": "Navette",
+    "tramTrain:FERRE": "Tram train",
+    "regionalCoach:ROUTIER": "Car régional",
+    "shuttleCoach:ROUTIER": "Navette bus",
+    ":ROUTIER": "Car LD",
+}
+
+TABLE_RENAME = {
+    "type_court": "Type",
+    "headsign": "N° Train",
+    "departure_date_fmt": "Date",
+    "departure": "Départ",
+    "arrival": "Arrivée",
+    "departure_time_fmt": "Heure Dép.",
+    "arrival_time_fmt": "Heure Arr.",
+}
+TABLE_COLS = ["Type", "N° Train", "Date", "Départ", "Arrivée", "Heure Dép.", "Heure Arr."]
+
+
+# ── Data loading with cache ──────────────────────────────────────────
+
+_cache: dict = {"data": None, "ts": 0}
+
+
+def load_data() -> pd.DataFrame:
+    now = time.time()
+    if _cache["data"] is not None and (now - _cache["ts"]) < CACHE_TTL:
+        return _cache["data"].copy()
+
     try:
-        connection = psycopg2.connect(
+        conn = psycopg2.connect(
             user=os.getenv("user"),
             password=os.getenv("password"),
             host=os.getenv("host"),
             port=os.getenv("port"),
-            dbname=os.getenv("dbname")
+            dbname=os.getenv("dbname"),
         )
         query = """
-            SELECT t.*, g.nom, g.position_geographique
+            SELECT t.type, t.arrival, t.headsign, t.departure,
+                   t.arrival_time, t.departure_date, t.departure_time,
+                   g.nom, g.position_geographique
             FROM trains_supprimes t
-            LEFT JOIN gares g
-            ON t.arrival = g.nom
+            LEFT JOIN gares g ON t.arrival = g.nom
             WHERE departure_date >= '2023-01-01'
               AND departure_date <= '2025-12-31'
         """
-        df = pd.read_sql(query, connection)
-        df['departure_date_dt'] = pd.to_datetime(df['departure_date'])
-        df['departure_date_fmt'] = df['departure_date_dt'].dt.strftime('%d/%m/%Y')
-        df['departure_time_fmt'] = pd.to_datetime(df['departure_time']).dt.strftime('%H:%M')
-        df['arrival_time_fmt'] = pd.to_datetime(df['arrival_time']).dt.strftime('%H:%M')
-        connection.close()
-        return df
-    except Exception as e:
-        print(f"Erreur chargement PostgreSQL: {e}")
+        df = pd.read_sql(query, conn)
+        conn.close()
+
+        df["departure_date_dt"] = pd.to_datetime(df["departure_date"])
+        df["departure_date_fmt"] = df["departure_date_dt"].dt.strftime("%d/%m/%Y")
+        df["departure_time_fmt"] = pd.to_datetime(
+            df["departure_time"]
+        ).dt.strftime("%H:%M")
+        df["arrival_time_fmt"] = pd.to_datetime(
+            df["arrival_time"]
+        ).dt.strftime("%H:%M")
+        df["type_court"] = df["type"].map(TYPE_TRAIN_COURT).fillna(df["type"])
+
+        _cache["data"] = df
+        _cache["ts"] = now
+        return df.copy()
+    except Exception as exc:
+        print(f"Erreur chargement PostgreSQL : {exc}")
         return pd.DataFrame()
 
-# Ajout du mapping des types de train vers noms courts
-TYPE_TRAIN_COURT = {
-    "highSpeedRail:FERRE": "TGV",
-    "international:FERRE": "International",
-    "longDistance:FERRE": "IntercitÃ© GL",
-    "interregionalRail:FERRE": "IntercitÃ© IR",
-    "regionalRail:FERRE": "TER",
-    "railShuttle:FERRE": "Navette",
-    "tramTrain:FERRE": "Tram train",
-    "regionalCoach:ROUTIER": "Car rÃ©gional",
-    "shuttleCoach:ROUTIER": "Navette bus",
-    ":ROUTIER": "Car LD"
-}
 
 data = load_data()
-data['type_court'] = data['type'].map(TYPE_TRAIN_COURT).fillna(data['type'])
 
-# --- UI ---
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+
+ECHARTS_RESPONSIVE_PATCH = """
+<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
+body>div:first-child{width:100%!important;height:100%!important}</style>
+<script>document.addEventListener('DOMContentLoaded',function(){
+var ro=new ResizeObserver(function(){var el=document.querySelector('body>div:first-child');
+if(el){var c=echarts.getInstanceByDom(el);if(c)c.resize();}});
+ro.observe(document.body);});</script>
+"""
+
+
+def echarts_iframe(chart):
+    html = chart.render_embed()
+    html = html.replace("</body>", ECHARTS_RESPONSIVE_PATCH + "</body>")
+    return ui.tags.iframe(
+        srcdoc=html,
+        style="width:100%;height:100%;border:none;min-height:400px;",
+    )
+
+
+def empty_chart(msg="Aucune donnée pour cette période"):
+    return ui.div(
+        icon_svg("chart-area", width="48px", fill="#ccc"),
+        ui.p(msg, class_="text-muted mt-2 mb-0"),
+        class_="d-flex flex-column align-items-center justify-content-center",
+        style="padding:4rem 1rem;",
+    )
+
+
+def make_table(df, height="600px"):
+    if df.empty:
+        return render.DataTable(
+            pd.DataFrame(columns=TABLE_COLS),
+            filters=True, width="100%", height=height, summary=False,
+        )
+    renamed = df.rename(columns=TABLE_RENAME)[TABLE_COLS]
+    return render.DataTable(
+        renamed, filters=True, width="100%", height=height, summary=False,
+    )
+
+
+# ── UI ────────────────────────────────────────────────────────────────
+
 app_ui = ui.page_sidebar(
     ui.sidebar(
-        ui.navset_pill(
-            ui.nav_panel("Dashboard", value="dashboard"),
-            ui.nav_panel("DonnÃ©es", value="donnees"),
-            id="nav"
+        ui.div(
+            ui.navset_pill(
+                ui.nav_panel("Dashboard", value="dashboard"),
+                ui.nav_panel("Données", value="donnees"),
+                id="nav",
+            ),
+            class_="mb-3",
         ),
         ui.input_select(
-            "type", "Type de train",
-            choices={"": "Tous"} | {t: t for t in sorted(data['type_court'].dropna().unique())}
+            "type_train",
+            "Type de train",
+            choices={"": "Tous"}
+            | {t: t for t in sorted(data["type_court"].dropna().unique())}
+            if not data.empty
+            else {"": "Tous"},
         ),
         ui.input_date_range(
-            "date_range", "PÃ©riode",
+            "date_range",
+            "Période",
             start=pd.Timestamp.today(),
             end=pd.Timestamp.today(),
             format="dd/mm/yyyy",
             language="fr",
             separator=" au ",
-            width="100%"
+            width="100%",
         ),
-        ui.tags.style("""
-        .btn-year {
-            background: #f0f0f0;
-            color: #333;
-            border: 1px solid #bbb;
-            border-radius: 4px;
-            padding: 8px 0;
-            margin: 2px;
-            cursor: pointer;
-            font-weight: normal;
-            min-width: 110px;
-            width: 110px;
-            display: inline-block;
-            text-align: center;
-        }
-        .btn-year-active {
-            background: #1976d2;
-            color: #fff;
-            border: 1.5px solid #1976d2;
-            font-weight: bold;
-        }
-        .btn-year-disabled {
-            background: #e0e0e0 !important;
-            color: #aaa !important;
-            border: 1px solid #ccc !important;
-            cursor: not-allowed !important;
-            opacity: 0.7;
-        }
-        .btn-row {
-            display: flex;
-            flex-direction: row;
-            justify-content: center;
-            margin-bottom: 4px;
-        }
-        .card-graph {
-            background: #fff;
-            border-radius: 12px;
-            box-shadow: 0 2px 12px 0 rgba(0,0,0,0.08), 0 1.5px 4px 0 rgba(0,0,0,0.08);
-            padding: 18px 18px 10px 18px;
-            margin-bottom: 18px;
-        }
-        """),
         ui.output_ui("special_day_buttons"),
         ui.output_ui("year_buttons"),
+        ui.input_action_button(
+            "refresh_data",
+            "Rafraîchir les données",
+            icon=icon_svg("arrows-rotate"),
+            class_="btn btn-outline-secondary btn-sm w-100 mt-3",
+        ),
+        ui.hr(),
         ui.div(
             ui.a(
-                "Source des donnÃ©es : data.gouv.fr",
+                "Source : data.gouv.fr",
                 href="https://www.data.gouv.fr/fr/datasets/641b456a5374b1bdc9dce4cf",
                 target="_blank",
-                style="font-size: 0.85em; color: #888; text-decoration: underline; display: block; margin-top: 30px; text-align: center;"
+                class_="text-muted small",
             ),
-            ui.a(
-                "Cartes GeoJSON : france-geojson.gregoiredavid.fr",
-                href="https://france-geojson.gregoiredavid.fr/",
-                target="_blank",
-                style="font-size: 0.8em; color: #888; text-decoration: underline; display: block; margin-top: 4px; text-align: center;"
-            )
+            class_="text-center",
         ),
         open="open",
-        width="280px"
+        width="300px",
+    ),
+    ui.head_content(
+        ui.tags.style("""
+            html, body, .bslib-page-fill { overflow-y: auto !important; height: auto !important; }
+            .card.bslib-card .card-body { display: flex; flex-direction: column; }
+            .card.bslib-card .card-body > .shiny-html-output { flex: 1; display: flex; flex-direction: column; min-height: 400px; }
+            .card.bslib-card .card-body > .shiny-html-output > iframe { flex: 1; }
+            .bslib-card .bslib-full-screen-enter { opacity: 0.4 !important; transition: opacity 0.2s; }
+            .bslib-card:hover .bslib-full-screen-enter { opacity: 1 !important; }
+        """),
     ),
     ui.output_ui("main_content"),
-    title="Dashboard des trains supprimÃ©s"
+    title=ui.TagList(icon_svg("train"), " Dashboard Trains Supprimés"),
+    fillable=False,
+    theme=shinyswatch.theme.flatly,
 )
 
-# --- Serveur ---
+
+# ── Server ────────────────────────────────────────────────────────────
+
+
 def server(input, output, session):
-    # Initialisation : sÃ©lectionne "Aujourd'hui" au lancement
-    selected_year = reactive.Value("today")
-    today = pd.Timestamp.today().strftime('%Y-%m-%d')
-    tomorrow = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
-    date_max = data['departure_date_dt'].max().strftime('%Y-%m-%d')
-    if not hasattr(server, '_init_done'):
-        ui.update_date_range(
-            "date_range",
-            start=today,
-            end=today,
-            session=session
-        )
-        server._init_done = True
+    selected_period = reactive.Value("today")
+    today_str = pd.Timestamp.today().strftime("%Y-%m-%d")
+    tomorrow_str = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
-    @reactive.Calc
+    # ── Reactive: filtered data ───────────────────────────────────────
+
+    @reactive.calc
     def filtered_data():
-        df = data.copy()
-        # Filtre type
-        if input.type():
-            df = df[df['type_court'] == input.type()]
-        # Filtre dates
+        d = load_data()
+        if d.empty:
+            return d
+
+        if input.type_train():
+            d = d[d["type_court"] == input.type_train()]
+
         start, end = input.date_range()
-        # Si aucune date sÃ©lectionnÃ©e, on prend 2024-01-01 Ã  aujourd'hui
         if not start or not end:
-            start = pd.Timestamp("2024-01-01")
-            end = pd.Timestamp.today()
-        df = df[(df['departure_date_dt'] >= pd.to_datetime(start)) &
-                (df['departure_date_dt'] <= pd.to_datetime(end))]
-        return df
+            start, end = pd.Timestamp("2024-01-01"), pd.Timestamp.today()
+        return d[
+            (d["departure_date_dt"] >= pd.to_datetime(start))
+            & (d["departure_date_dt"] <= pd.to_datetime(end))
+        ]
 
-    @output
-    @render.data_frame
-    def filtered_table():
-        df = filtered_data()
+    # ── Refresh ───────────────────────────────────────────────────────
 
-        # Renommage et rÃ©ordonnancement
-        table = (
-            df.rename(columns={
-                'type_court': 'Type',
-                'headsign': 'NÂ° Train',
-                'departure_date_fmt': 'Date',
-                'departure': 'DÃ©part',
-                'arrival': 'ArrivÃ©e',
-                'departure_time_fmt': 'Heure DÃ©p.',
-                'arrival_time_fmt': 'Heure Arr.'
-            })[
-                ['Type', 'NÂ° Train', 'Date', 'DÃ©part', 'ArrivÃ©e', 'Heure DÃ©p.', 'Heure Arr.']
-            ]
-        )
+    @reactive.effect
+    @reactive.event(input.refresh_data)
+    def _refresh():
+        _cache["ts"] = 0
+        ui.notification_show("Données rafraîchies !", type="message", duration=3)
 
-        return render.DataTable(
-            table,
-            filters=True,
-            width='100%',
-            height='800px',
-            summary=False,
-            styles=[
-                {
-                    "rows": None,
-                    "cols": None,
-                    "style": {
-                        "font-size": "1rem",
-                        "background": "#fff"
-                    }
-                }
-            ]
-        )
+    # ── Charts (pyecharts) ────────────────────────────────────────────
 
-    @output
     @render.ui
     def bar_chart():
-        from shiny import ui as shin_ui
         df = filtered_data()
         if df.empty:
-            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
-        counts = df['type_court'].value_counts()
-        if counts.empty:
-            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
+            return empty_chart()
+        counts = df["type_court"].value_counts()
         bar = (
             Bar(init_opts=opts.InitOpts(width="100%", height="375px"))
             .add_xaxis(counts.index.tolist())
-            .add_yaxis("Suppression", counts.values.tolist())
+            .add_yaxis("Suppressions", counts.values.tolist(),
+                        itemstyle_opts=opts.ItemStyleOpts(color="#2c7fb8"))
             .set_global_opts(
                 title_opts=opts.TitleOpts(title="Suppressions par type"),
                 xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=30)),
                 tooltip_opts=opts.TooltipOpts(trigger="axis"),
-                legend_opts=opts.LegendOpts(is_show=False)
+                legend_opts=opts.LegendOpts(is_show=False),
             )
         )
-        html = bar.render_embed()
-        return shin_ui.tags.iframe(srcdoc=html, style="width:100%; height:400px; border:none;")
+        return echarts_iframe(bar)
 
-    # Carte France (remplace pie_chart)
-    @output
     @render.ui
     def map_france():
         df = filtered_data()
-        if df.empty:
-            return ui.tags.div("Aucune donnÃ©e Ã  afficher", style="color:#888; padding:1rem;")
-        coords = df['position_geographique'].str.split(',', expand=True).astype(float)
-        df['lat'], df['lon'] = coords[0], coords[1]
+        if df.empty or "position_geographique" not in df.columns:
+            return empty_chart("Aucune donnée géographique")
+
+        geo_df = df.dropna(subset=["position_geographique"]).copy()
+        if geo_df.empty:
+            return empty_chart("Aucune donnée géographique")
+
+        coords = geo_df["position_geographique"].str.split(",", expand=True).astype(float)
+        geo_df["lat"] = coords[0]
+        geo_df["lon"] = coords[1]
+
         data_map = (
-            df.groupby('nom')
-              .agg(count=('nom','size'), lon=('lon','first'), lat=('lat','first'))
-              .reset_index()
+            geo_df.groupby("nom")
+            .agg(count=("nom", "size"), lon=("lon", "first"), lat=("lat", "first"))
+            .reset_index()
         )
+
         with open("france.geo.json", "r", encoding="utf-8") as f:
             france_geo = json.load(f)
+
         geo = Geo(init_opts=opts.InitOpts(width="100%", height="375px"))
         geo.add_js_funcs(f"echarts.registerMap('France',{json.dumps(france_geo)})")
         geo.add_schema(
             maptype="France",
             itemstyle_opts=opts.ItemStyleOpts(color="#f5f5f5", border_color="#bbb"),
-            emphasis_label_opts=opts.LabelOpts(is_show=True)
+            emphasis_label_opts=opts.LabelOpts(is_show=True),
         )
         for _, row in data_map.iterrows():
-            geo.add_coordinate(row['nom'], row['lon'], row['lat'])
+            geo.add_coordinate(row["nom"], row["lon"], row["lat"])
         geo.add(
             series_name="Suppressions",
-            data_pair=[(row['nom'], row['count']) for _, row in data_map.iterrows()],
-            type_="effectScatter", symbol_size=8,
-            label_opts=opts.LabelOpts(formatter="{b}", position="right", is_show=False)
+            data_pair=[(row["nom"], row["count"]) for _, row in data_map.iterrows()],
+            type_="effectScatter",
+            symbol_size=8,
+            label_opts=opts.LabelOpts(formatter="{b}", position="right", is_show=False),
         )
         geo.set_series_opts(effect_opts=opts.EffectOpts(scale=4))
         geo.set_global_opts(
-            title_opts=opts.TitleOpts(title="Suppressions de trains en France"),
-            visualmap_opts=opts.VisualMapOpts(max_=int(data_map['count'].max()), is_piecewise=True),
-            legend_opts=opts.LegendOpts(is_show=False)
+            title_opts=opts.TitleOpts(title="Suppressions en France"),
+            visualmap_opts=opts.VisualMapOpts(
+                max_=int(data_map["count"].max()), is_piecewise=True
+            ),
+            legend_opts=opts.LegendOpts(is_show=False),
         )
-        html = geo.render_embed()
-        from shiny import ui as shin
-        return shin.tags.iframe(srcdoc=html, style="width:100%; height:400px; border:none;")
-    
-    @output
-    @render.ui
-    def line_chart():
-        from shiny import ui as shin_ui
-        df = filtered_data()
-        if df.empty:
-            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
-        # Grouper par mois
-        monthly = df.groupby(df['departure_date_dt'].dt.to_period('M')).size().reset_index(name='count')
-        if monthly.empty:
-            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
-        monthly['month'] = monthly['departure_date_dt'].dt.strftime('%m/%Y')
-        from pyecharts.charts import Line
-        from pyecharts import options as opts
-        line = (
-            Line(init_opts=opts.InitOpts(width="100%", height="375px"))
-            .add_xaxis(monthly['month'].tolist())
-            .add_yaxis("Suppressions", monthly['count'].tolist())
-            .set_global_opts(
-                title_opts=opts.TitleOpts(title="Ã‰volution mensuelle"),
-                xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=45)),
-                tooltip_opts=opts.TooltipOpts(trigger="axis"),
-                legend_opts=opts.LegendOpts(
-                    orient="vertical",
-                    pos_top="top",
-                    pos_right="0%"
-                )
-            )
-        )
-        html = line.render_embed()
-        return shin_ui.tags.iframe(srcdoc=html, style="width:100%; height:400px; border:none;")
+        return echarts_iframe(geo)
 
-    @output
-    @render.ui
-    def histo_heure():
-        from shiny import ui as shin_ui
-        df = filtered_data()
-        if df.empty or 'departure_time_fmt' not in df.columns:
-            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
-        df['heure'] = pd.to_datetime(df['departure_time_fmt'], format='%H:%M', errors='coerce').dt.hour
-        counts = df['heure'].value_counts().sort_index()
-        if counts.empty:
-            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
-        from pyecharts.charts import Bar
-        from pyecharts import options as opts
-        bar = (
-            Bar(init_opts=opts.InitOpts(width="100%", height="375px"))
-            .add_xaxis([f"{h:02d}h" for h in counts.index])
-            .add_yaxis("Suppressions", counts.values.tolist())
-            .set_global_opts(
-                title_opts=opts.TitleOpts(title="Suppressions par heure"),
-                xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=0)),
-                tooltip_opts=opts.TooltipOpts(trigger="axis"),
-                legend_opts=opts.LegendOpts(is_show=False)
-            )
-        )
-        html = bar.render_embed()
-        return shin_ui.tags.iframe(srcdoc=html, style="width:100%; height:400px; border:none;")
-
-    # --- KPI Dashboard 1 : un seul jour ---
-    @output
-    @render.ui
-    def kpi_total_supp():
-        df = filtered_data()
-        count = df.shape[0]
-        return ui.value_box(
-            "Trains supprimÃ©s",
-            f"{count}",
-            showcase=icon_svg("train")
-        )
-
-    @output
-    @render.ui
-    def kpi_gare_max():
-        df = filtered_data()
-        if df.empty:
-            gare = "-"
-            nb = "-"
-        else:
-            top = df['departure'].value_counts().idxmax()
-            nb = df['departure'].value_counts().max()
-            gare = f"{top} ({nb})"
-        return ui.value_box(
-            "Gare la plus impactÃ©e",
-            gare,
-            showcase=icon_svg("location-dot")
-        )
-
-    @output
-    @render.ui
-    def kpi_taux_supp():
-        df = filtered_data()
-        count = df.shape[0]
-        taux = round(100 * count / 15000, 2)
-        return ui.value_box(
-            "% trains supprimÃ©s",
-            f"{taux} %",
-            showcase=icon_svg("percent")
-        )
-
-    # --- KPI Dashboard 2 : plage de dates ---
-    @output
-    @render.ui
-    def kpi_total_supp_period():
-        df = filtered_data()
-        count = df.shape[0]
-        return ui.value_box(
-            "Trains supprimÃ©s",
-            f"{count}",
-            showcase=icon_svg("train")
-        )
-
-    @output
-    @render.ui
-    def kpi_moyenne_jour():
-        df = filtered_data()
-        if df.empty:
-            val = "-"
-        else:
-            val = round(df.groupby('departure_date_dt').size().mean(), 2)
-        return ui.value_box(
-            "Moyenne/jour",
-            f"{val}",
-            showcase=icon_svg("chart-bar")
-        )
-
-    @output
-    @render.ui
-    def kpi_taux_moyen():
-        df = filtered_data()
-        if df.empty:
-            taux = "-"
-        else:
-            jours = df['departure_date_dt'].nunique()
-            taux = round(100 * (df.shape[0] / (jours * 15000)), 2) if jours else "-"
-        return ui.value_box(
-            "Taux moyen de suppression",
-            f"{taux} %",
-            showcase=icon_svg("percent")
-        )
-
-    @output
-    @render.data_frame
-    def table_jour():
-        df = filtered_data()
-        if df.empty:
-            return render.DataTable(
-                pd.DataFrame(),
-                filters=True,
-                width='100%',
-                height='100%',
-                summary=False,
-                styles=[
-                    {
-                        "rows": None,
-                        "cols": None,
-                        "style": {
-                            "font-size": "1rem",
-                            "background": "#fff"
-                        }
-                    }
-                ]
-            )
-        table = (
-            df.rename(columns={
-                'type_court': 'Type',
-                'headsign': 'NÂ° Train',
-                'departure_date_fmt': 'Date',
-                'departure': 'DÃ©part',
-                'arrival': 'ArrivÃ©e',
-                'departure_time_fmt': 'Heure DÃ©p.',
-                'arrival_time_fmt': 'Heure Arr.'
-            })[
-                ['Type', 'NÂ° Train', 'Date', 'DÃ©part', 'ArrivÃ©e', 'Heure DÃ©p.', 'Heure Arr.']
-            ]
-        )
-        return render.DataTable(
-            table,
-            filters=True,
-            width='100%',
-            height='400px',
-            summary=False,
-            styles=[
-                {
-                    "rows": None,
-                    "cols": None,
-                    "style": {
-                        "font-size": "1rem",
-                        "background": "#fff"
-                    }
-                }
-            ]
-        )
-
-    @output
     @render.ui
     def pie_chart():
-        from shiny import ui as shin_ui
         df = filtered_data()
         if df.empty:
-            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
-        top = df['departure'].value_counts().head(10)
-        if top.empty:
-            return shin_ui.tags.div("Aucune donnÃ©e Ã  afficher pour cette pÃ©riode", style="color:#888; padding:1rem;")
+            return empty_chart()
+        top = df["departure"].value_counts().head(10)
         pie = (
             Pie(init_opts=opts.InitOpts(width="100%", height="375px"))
             .add(
@@ -505,165 +331,328 @@ def server(input, output, session):
                 radius=["40%", "70%"],
             )
             .set_global_opts(
-                title_opts=opts.TitleOpts(title="Top 10 gares de dÃ©part"),
+                title_opts=opts.TitleOpts(title="Top 10 gares de départ"),
                 legend_opts=opts.LegendOpts(
-                    orient="vertical",
-                    pos_top="top",
-                    pos_right="0%"
-                )
-            )
-        )
-        html = pie.render_embed()
-        return shin_ui.tags.iframe(srcdoc=html, style="width:100%; height:400px; border:none;")
-
-    @output
-    @render.ui
-    def main_content():
-        nav = input.nav()
-        start, end = input.date_range()
-        if nav == "dashboard":
-            if start == end:
-                # Dashboard 1
-                return ui.TagList(
-                    ui.row(
-                        ui.column(4, ui.output_ui("kpi_total_supp")),
-                        ui.column(4, ui.output_ui("kpi_gare_max")),
-                        ui.column(4, ui.output_ui("kpi_taux_supp")),
-                    ),
-                    ui.row(
-                        ui.column(6, ui.div(ui.output_ui("bar_chart"), class_="card-graph")),
-                        ui.column(6, ui.div(ui.output_ui("map_france"), class_="card-graph"))
-                    ),
-                    ui.row(
-                        ui.column(6, ui.div(ui.output_ui("histo_heure"), class_="card-graph")),
-                        ui.column(6, ui.output_data_frame("table_jour"))
-                        
-                    ),
-                )
-            else:
-                # Dashboard 2
-                return ui.TagList(
-                    ui.row(
-                        ui.column(4, ui.output_ui("kpi_total_supp_period")),
-                        ui.column(4, ui.output_ui("kpi_moyenne_jour")),
-                        ui.column(4, ui.output_ui("kpi_taux_moyen")),
-                    ),
-                    ui.row(
-                        ui.column(6, ui.div(ui.output_ui("bar_chart"), class_="card-graph")),
-                        ui.column(6, ui.div(ui.output_ui("pie_chart"), class_="card-graph"))
-                    ),
-                    ui.row(
-                        ui.column(6, ui.div(ui.output_ui("line_chart"), class_="card-graph")),
-                        ui.column(6, ui.div(ui.output_ui("histo_heure"), class_="card-graph"))
-                    ),
-                )
-        elif nav == "donnees":
-            return ui.div(
-                ui.div(
-                    ui.h3("Tableau filtrÃ©", style="display:inline-block; vertical-align:middle; margin-right:18px; margin-bottom:0;"),
-                    ui.download_button("download_csv", "CSV", class_="btn-year", style="margin-right:10px; display:inline-block; vertical-align:middle;"),
-                    style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;"
+                    orient="vertical", pos_top="top", pos_right="0%"
                 ),
-                ui.output_data_frame("filtered_table"),
-                style="width:100%; margin:0; padding:0;"
             )
-
-    special_days = [("today", "Aujourd'hui"), ("tomorrow", "Demain")]
-
-    @output
-    @render.ui
-    def special_day_buttons():
-        # DÃ©sactive "Demain" si la date max de la BDD < demain
-        demain_disabled = pd.to_datetime(date_max) < pd.to_datetime(tomorrow)
-        return ui.div(
-            *[
-                ui.input_action_button(
-                    f"special_{key}",
-                    label,
-                    class_="btn-year" + (" btn-year-active" if selected_year.get() == key else "") + (" btn-year-disabled" if key == "tomorrow" and demain_disabled else ""),
-                    style="margin:2px;",
-                    disabled=demain_disabled if key == "tomorrow" else False,
-                    title="Aucune donnÃ©e pour demain" if key == "tomorrow" and demain_disabled else ""
-                )
-                for key, label in special_days
-            ],
-            class_="btn-row"
         )
+        return echarts_iframe(pie)
 
-    @output
     @render.ui
-    def year_buttons():
-        return ui.div(
-            *[
-                ui.input_action_button(
-                    f"year_{year}",
-                    str(year),
-                    class_="btn-year" + (" btn-year-active" if selected_year.get() == year else ""),
-                    style="margin:2px;"
-                )
-                for year in sorted(data['departure_date_dt'].dt.year.unique())
-            ],
-            class_="btn-row"
+    def line_chart():
+        df = filtered_data()
+        if df.empty:
+            return empty_chart()
+        monthly = (
+            df.groupby(df["departure_date_dt"].dt.to_period("M"))
+            .size()
+            .reset_index(name="count")
         )
-
-    # Observers pour les boutons annÃ©e
-    def make_year_observer(year):
-        @reactive.Effect
-        @reactive.event(input[f"year_{year}"])
-        def _():
-            selected_year.set(year)
-            if year == data['departure_date_dt'].dt.year.max():
-                start = f"{year}-01-01"
-                end = data[data['departure_date_dt'].dt.year == year]['departure_date_dt'].max().strftime('%Y-%m-%d')
-            else:
-                start = f"{year}-01-01"
-                end = f"{year}-12-31"
-            ui.update_date_range(
-                "date_range",
-                start=start,
-                end=end,
-                session=session
+        monthly["month"] = monthly["departure_date_dt"].dt.strftime("%m/%Y")
+        line = (
+            Line(init_opts=opts.InitOpts(width="100%", height="375px"))
+            .add_xaxis(monthly["month"].tolist())
+            .add_yaxis(
+                "Suppressions",
+                monthly["count"].tolist(),
+                is_smooth=True,
+                areastyle_opts=opts.AreaStyleOpts(opacity=0.15),
             )
-    for year in sorted(data['departure_date_dt'].dt.year.unique()):
-        make_year_observer(year)
+            .set_global_opts(
+                title_opts=opts.TitleOpts(title="Évolution mensuelle"),
+                xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=45)),
+                tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                legend_opts=opts.LegendOpts(
+                    orient="vertical", pos_top="top", pos_right="0%"
+                ),
+            )
+        )
+        return echarts_iframe(line)
 
-    # Observers pour les boutons spÃ©ciaux
-    @reactive.Effect
-    @reactive.event(input.special_today)
-    def _():
-        selected_year.set("today")
-        today = pd.Timestamp.today().strftime('%Y-%m-%d')
-        ui.update_date_range(
-            "date_range",
-            start=today,
-            end=today,
-            session=session
+    @render.ui
+    def histo_heure():
+        df = filtered_data()
+        if df.empty or "departure_time_fmt" not in df.columns:
+            return empty_chart()
+        df_h = df.copy()
+        df_h["heure"] = pd.to_datetime(
+            df_h["departure_time_fmt"], format="%H:%M", errors="coerce"
+        ).dt.hour
+        counts = df_h["heure"].value_counts().sort_index()
+        bar = (
+            Bar(init_opts=opts.InitOpts(width="100%", height="375px"))
+            .add_xaxis([f"{h:02d}h" for h in counts.index])
+            .add_yaxis("Suppressions", counts.values.tolist(),
+                        itemstyle_opts=opts.ItemStyleOpts(color="#41b6c4"))
+            .set_global_opts(
+                title_opts=opts.TitleOpts(title="Suppressions par heure"),
+                xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=0)),
+                tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                legend_opts=opts.LegendOpts(is_show=False),
+            )
+        )
+        return echarts_iframe(bar)
+
+    # ── KPIs ──────────────────────────────────────────────────────────
+
+    @render.ui
+    def kpi_total():
+        count = filtered_data().shape[0]
+        return ui.value_box(
+            "Trains supprimés",
+            f"{count:,}".replace(",", " "),
+            showcase=icon_svg("train"),
+            theme="primary",
         )
 
-    @reactive.Effect
-    @reactive.event(input.special_tomorrow)
-    def _():
-        selected_year.set("tomorrow")
-        tomorrow = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
-        ui.update_date_range(
-            "date_range",
-            start=tomorrow,
-            end=tomorrow,
-            session=session
+    @render.ui
+    def kpi_gare_max():
+        df = filtered_data()
+        if df.empty:
+            return ui.value_box(
+                "Gare la + impactée", "-",
+                showcase=icon_svg("location-dot"), theme="info",
+            )
+        top = df["departure"].value_counts()
+        return ui.value_box(
+            "Gare la + impactée",
+            f"{top.idxmax()} ({top.max()})",
+            showcase=icon_svg("location-dot"),
+            theme="info",
         )
 
-    @output
+    @render.ui
+    def kpi_taux():
+        df = filtered_data()
+        count = df.shape[0]
+        days = max(df["departure_date_dt"].nunique(), 1) if not df.empty else 1
+        taux = round(100 * count / (days * DAILY_TRAIN_ESTIMATE), 2)
+        return ui.value_box(
+            "Taux de suppression",
+            f"{taux} %",
+            showcase=icon_svg("percent"),
+            theme="warning",
+        )
+
+    @render.ui
+    def kpi_moyenne():
+        df = filtered_data()
+        if df.empty:
+            val = "-"
+        else:
+            val = f"{round(df.groupby('departure_date_dt').size().mean(), 1):,}".replace(",", " ")
+        return ui.value_box(
+            "Moyenne / jour",
+            str(val),
+            showcase=icon_svg("chart-line"),
+            theme="info",
+        )
+
+    # ── Tables ────────────────────────────────────────────────────────
+
+    @render.data_frame
+    def filtered_table():
+        return make_table(filtered_data(), height="800px")
+
+    @render.data_frame
+    def table_jour():
+        return make_table(filtered_data(), height="400px")
+
+    # ── Download ──────────────────────────────────────────────────────
+
     @render.download(filename="trains_supprimes.csv")
     def download_csv():
         df = filtered_data()
         buf = io.BytesIO()
-        # Ajout du BOM UTF-8 pour compatibilitÃ© Excel et accents
-        csv_data = df.to_csv(index=False, sep=";", encoding="utf-8-sig")
-        buf.write(csv_data.encode("utf-8-sig"))
+        buf.write(
+            df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
+        )
         buf.seek(0)
         return buf
 
+    # ── Main content (dynamic layout) ────────────────────────────────
+
+    @render.ui
+    def main_content():
+        nav = input.nav()
+        start, end = input.date_range()
+
+        if nav == "dashboard":
+            is_single_day = start == end
+
+            if is_single_day:
+                kpi_row = ui.row(
+                    ui.column(4, ui.output_ui("kpi_total")),
+                    ui.column(4, ui.output_ui("kpi_gare_max")),
+                    ui.column(4, ui.output_ui("kpi_taux")),
+                    class_="mb-3",
+                )
+                return ui.TagList(
+                    kpi_row,
+                    ui.row(
+                        ui.column(6, ui.card(
+                            ui.card_header("Par type de train"),
+                            ui.output_ui("bar_chart"),
+                            full_screen=True,
+                        )),
+                        ui.column(6, ui.card(
+                            ui.card_header("Carte des suppressions"),
+                            ui.output_ui("map_france"),
+                            full_screen=True,
+                        )),
+                        class_="mb-3",
+                    ),
+                    ui.row(
+                        ui.column(6, ui.card(
+                            ui.card_header("Répartition horaire"),
+                            ui.output_ui("histo_heure"),
+                            full_screen=True,
+                        )),
+                        ui.column(6, ui.card(
+                            ui.card_header("Détail des trains"),
+                            ui.output_data_frame("table_jour"),
+                        )),
+                    ),
+                )
+            else:
+                kpi_row = ui.row(
+                    ui.column(4, ui.output_ui("kpi_total")),
+                    ui.column(4, ui.output_ui("kpi_moyenne")),
+                    ui.column(4, ui.output_ui("kpi_taux")),
+                    class_="mb-3",
+                )
+                return ui.TagList(
+                    kpi_row,
+                    ui.row(
+                        ui.column(6, ui.card(
+                            ui.card_header("Par type de train"),
+                            ui.output_ui("bar_chart"),
+                            full_screen=True,
+                        )),
+                        ui.column(6, ui.card(
+                            ui.card_header("Top 10 gares de départ"),
+                            ui.output_ui("pie_chart"),
+                            full_screen=True,
+                        )),
+                        class_="mb-3",
+                    ),
+                    ui.row(
+                        ui.column(6, ui.card(
+                            ui.card_header("Tendance mensuelle"),
+                            ui.output_ui("line_chart"),
+                            full_screen=True,
+                        )),
+                        ui.column(6, ui.card(
+                            ui.card_header("Répartition horaire"),
+                            ui.output_ui("histo_heure"),
+                            full_screen=True,
+                        )),
+                    ),
+                )
+
+        elif nav == "donnees":
+            return ui.card(
+                ui.card_header(
+                    ui.div(
+                        ui.span("Tableau filtré", class_="fw-bold fs-5"),
+                        ui.download_button(
+                            "download_csv",
+                            "Exporter CSV",
+                            class_="btn btn-sm btn-outline-primary",
+                        ),
+                        class_="d-flex align-items-center justify-content-between w-100",
+                    )
+                ),
+                ui.output_data_frame("filtered_table"),
+            )
+
+    # ── Quick-date buttons ────────────────────────────────────────────
+
+    SPECIAL_DAYS = [("today", "Aujourd'hui"), ("tomorrow", "Demain")]
+
+    @render.ui
+    def special_day_buttons():
+        date_max_str = (
+            data["departure_date_dt"].max().strftime("%Y-%m-%d")
+            if not data.empty
+            else today_str
+        )
+        demain_disabled = pd.to_datetime(date_max_str) < pd.to_datetime(tomorrow_str)
+
+        buttons = []
+        for key, label in SPECIAL_DAYS:
+            is_active = selected_period.get() == key
+            is_disabled = key == "tomorrow" and demain_disabled
+            cls = "btn btn-sm me-1 mb-1 "
+            cls += "btn-primary" if is_active else "btn-outline-secondary"
+            buttons.append(
+                ui.input_action_button(
+                    f"special_{key}",
+                    label,
+                    class_=cls,
+                    disabled=is_disabled,
+                )
+            )
+        return ui.div(*buttons, class_="d-flex justify-content-center mb-2")
+
+    @render.ui
+    def year_buttons():
+        if data.empty:
+            return ui.div()
+        years = sorted(data["departure_date_dt"].dt.year.unique())
+        buttons = []
+        for y in years:
+            is_active = selected_period.get() == y
+            cls = "btn btn-sm me-1 mb-1 "
+            cls += "btn-primary" if is_active else "btn-outline-secondary"
+            buttons.append(
+                ui.input_action_button(f"year_{y}", str(y), class_=cls)
+            )
+        return ui.div(*buttons, class_="d-flex justify-content-center flex-wrap")
+
+    # ── Year observers ────────────────────────────────────────────────
+
+    def make_year_observer(year):
+        @reactive.effect
+        @reactive.event(input[f"year_{year}"])
+        def _():
+            selected_period.set(year)
+            year_data = data[data["departure_date_dt"].dt.year == year]
+            end_date = (
+                year_data["departure_date_dt"].max().strftime("%Y-%m-%d")
+                if not year_data.empty
+                else f"{year}-12-31"
+            )
+            ui.update_date_range(
+                "date_range",
+                start=f"{year}-01-01",
+                end=end_date,
+                session=session,
+            )
+
+    if not data.empty:
+        for yr in sorted(data["departure_date_dt"].dt.year.unique()):
+            make_year_observer(yr)
+
+    # ── Special-day observers ─────────────────────────────────────────
+
+    @reactive.effect
+    @reactive.event(input.special_today)
+    def _set_today():
+        selected_period.set("today")
+        t = pd.Timestamp.today().strftime("%Y-%m-%d")
+        ui.update_date_range("date_range", start=t, end=t, session=session)
+
+    @reactive.effect
+    @reactive.event(input.special_tomorrow)
+    def _set_tomorrow():
+        selected_period.set("tomorrow")
+        t = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        ui.update_date_range("date_range", start=t, end=t, session=session)
+
+
 app = App(app_ui, server)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8001)

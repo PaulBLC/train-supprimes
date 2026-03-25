@@ -1,7 +1,7 @@
-python-dotenv==1.0.0      # Gestion des variables d'environnement
-supabase==1.0.3           # Client Supabase
-pandas==2.1.4             # Manipulation de données
-pyecharts==2.0.4          # Graphiques interactifs
-shiny==1.2.0              # Application Shiny pour Python
-psycopg2-binary==2.9.9    # Connecteur PostgreSQL
-faicons==0.2.2            # Icônes Font Awesome pour Shiny
+python-dotenv>=1.0.0
+pandas>=2.1.4
+pyecharts>=2.0.4
+shiny>=1.2.0
+shinyswatch>=0.7.0
+psycopg2-binary>=2.9.9
+faicons>=0.2.2
