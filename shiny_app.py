@@ -74,7 +74,6 @@ def load_data() -> pd.DataFrame:
             FROM trains_supprimes t
             LEFT JOIN gares g ON t.arrival = g.nom
             WHERE departure_date >= '2023-01-01'
-              AND departure_date <= '2025-12-31'
         """
         df = pd.read_sql(query, conn)
         conn.close()
