@@ -24,6 +24,11 @@ load_dotenv()
 CACHE_TTL = 300
 DAILY_TRAIN_ESTIMATE = 15_000
 
+C_BLUE = "#4361EE"
+C_TEAL = "#06D6A0"
+C_PIE  = ["#4361EE", "#7209B7", "#F72585", "#4CC9F0", "#06D6A0",
+          "#F8961E", "#023E8A", "#560BAD", "#3A86FF", "#FF006E"]
+
 TYPE_TRAIN_COURT = {
     "highSpeedRail:FERRE": "TGV",
     "international:FERRE": "International",
@@ -53,6 +58,9 @@ TABLE_COLS = ["Type", "N° Train", "Date", "Départ", "Arrivée", "Heure Dép.",
 
 _cache: dict = {"data": None, "ts": 0}
 
+with open("france.geo.json", "r", encoding="utf-8") as _f:
+    FRANCE_GEOJSON = json.load(_f)
+
 
 def load_data() -> pd.DataFrame:
     now = time.time()
@@ -80,12 +88,8 @@ def load_data() -> pd.DataFrame:
 
         df["departure_date_dt"] = pd.to_datetime(df["departure_date"])
         df["departure_date_fmt"] = df["departure_date_dt"].dt.strftime("%d/%m/%Y")
-        df["departure_time_fmt"] = pd.to_datetime(
-            df["departure_time"]
-        ).dt.strftime("%H:%M")
-        df["arrival_time_fmt"] = pd.to_datetime(
-            df["arrival_time"]
-        ).dt.strftime("%H:%M")
+        df["departure_time_fmt"] = pd.to_datetime(df["departure_time"]).dt.strftime("%H:%M")
+        df["arrival_time_fmt"] = pd.to_datetime(df["arrival_time"]).dt.strftime("%H:%M")
         df["type_court"] = df["type"].map(TYPE_TRAIN_COURT).fillna(df["type"])
 
         _cache["data"] = df
@@ -99,11 +103,10 @@ def load_data() -> pd.DataFrame:
 data = load_data()
 
 
-# ── Helpers ───────────────────────────────────────────────────────────
-
+# ── Chart helpers ─────────────────────────────────────────────────────
 
 ECHARTS_RESPONSIVE_PATCH = """
-<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
+<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:transparent}
 body>div:first-child{width:100%!important;height:100%!important}</style>
 <script>document.addEventListener('DOMContentLoaded',function(){
 var ro=new ResizeObserver(function(){var el=document.querySelector('body>div:first-child');
@@ -113,20 +116,50 @@ ro.observe(document.body);});</script>
 
 
 def echarts_iframe(chart):
-    html = chart.render_embed()
-    html = html.replace("</body>", ECHARTS_RESPONSIVE_PATCH + "</body>")
+    html = chart.render_embed().replace("</body>", ECHARTS_RESPONSIVE_PATCH + "</body>")
     return ui.tags.iframe(
         srcdoc=html,
         style="width:100%;height:100%;border:none;min-height:400px;",
     )
 
 
+def chart_init(height="375px"):
+    return opts.InitOpts(width="100%", height=height, bg_color="transparent")
+
+
+def chart_tooltip(trigger="axis"):
+    return opts.TooltipOpts(
+        trigger=trigger,
+        background_color="rgba(255,255,255,0.97)",
+        border_color="#E2E8F0",
+        border_width=1,
+        textstyle_opts=opts.TextStyleOpts(color="#2D3748"),
+    )
+
+
+def xaxis_opts(rotate=0):
+    return opts.AxisOpts(
+        axislabel_opts=opts.LabelOpts(rotate=rotate, color="#718096"),
+        axisline_opts=opts.AxisLineOpts(linestyle_opts=opts.LineStyleOpts(color="#E2E8F0")),
+        splitline_opts=opts.SplitLineOpts(is_show=False),
+    )
+
+
+def yaxis_opts():
+    return opts.AxisOpts(
+        axislabel_opts=opts.LabelOpts(color="#718096"),
+        splitline_opts=opts.SplitLineOpts(
+            linestyle_opts=opts.LineStyleOpts(color="#F1F5F9", type_="dashed")
+        ),
+    )
+
+
 def empty_chart(msg="Aucune donnée pour cette période"):
     return ui.div(
-        icon_svg("chart-area", width="48px", fill="#ccc"),
-        ui.p(msg, class_="text-muted mt-2 mb-0"),
-        class_="d-flex flex-column align-items-center justify-content-center",
-        style="padding:4rem 1rem;",
+        icon_svg("chart-area", width="44px", fill="#CBD5E0"),
+        ui.p(msg, class_="text-muted mt-3 mb-0 small fw-medium"),
+        class_="d-flex flex-column align-items-center justify-content-center h-100",
+        style="padding:3rem 1rem;",
     )
 
 
@@ -136,13 +169,75 @@ def make_table(df, height="600px"):
             pd.DataFrame(columns=TABLE_COLS),
             filters=True, width="100%", height=height, summary=False,
         )
-    renamed = df.rename(columns=TABLE_RENAME)[TABLE_COLS]
     return render.DataTable(
-        renamed, filters=True, width="100%", height=height, summary=False,
+        df.rename(columns=TABLE_RENAME)[TABLE_COLS],
+        filters=True, width="100%", height=height, summary=False,
+    )
+
+
+def card_icon_header(icon_name, label):
+    return ui.card_header(
+        ui.span(icon_svg(icon_name, width="14px", fill="currentColor"), " ", label)
     )
 
 
 # ── UI ────────────────────────────────────────────────────────────────
+
+CUSTOM_CSS = """
+    html, body, .bslib-page-fill { overflow-y: auto !important; height: auto !important; }
+
+    .card.bslib-card {
+        border: 1px solid rgba(0,0,0,.05) !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,.04), 0 6px 24px rgba(0,0,0,.04) !important;
+        border-radius: 12px !important;
+        transition: box-shadow .2s ease;
+    }
+    .card.bslib-card:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,.07), 0 12px 32px rgba(0,0,0,.08) !important;
+    }
+    .card.bslib-card .card-header {
+        background: #F9FAFF !important;
+        border-bottom: 1px solid rgba(67,97,238,.1) !important;
+        font-weight: 600;
+        font-size: .875rem;
+        letter-spacing: .02em;
+        color: #2D3748;
+        border-radius: 12px 12px 0 0 !important;
+        padding: .7rem 1.25rem;
+    }
+    .card.bslib-card .card-body { display: flex; flex-direction: column; }
+    .card.bslib-card .card-body > .shiny-html-output {
+        flex: 1; display: flex; flex-direction: column; min-height: 400px;
+    }
+    .card.bslib-card .card-body > .shiny-html-output > iframe { flex: 1; }
+
+    .bslib-value-box {
+        border-radius: 12px !important;
+        border: none !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,.04), 0 6px 24px rgba(0,0,0,.06) !important;
+    }
+
+    .bslib-sidebar-layout > .sidebar {
+        background: #F7F9FF !important;
+        border-right: 1px solid #E8ECF8 !important;
+    }
+
+    .bslib-card .bslib-full-screen-enter { opacity: .3 !important; transition: opacity .2s; }
+    .bslib-card:hover .bslib-full-screen-enter { opacity: .9 !important; }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #F1F5F9; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E0; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+    label.control-label {
+        font-size: .78rem; font-weight: 600; color: #4A5568;
+        text-transform: uppercase; letter-spacing: .06em;
+    }
+    .nav-pills .nav-link { font-size: .85rem; font-weight: 500; }
+    hr { border-color: #E8ECF8; }
+    .navbar-brand { font-weight: 700; }
+"""
 
 app_ui = ui.page_sidebar(
     ui.sidebar(
@@ -183,7 +278,7 @@ app_ui = ui.page_sidebar(
         ui.hr(),
         ui.div(
             ui.a(
-                "Source : data.gouv.fr",
+                icon_svg("database", width="12px"), " Source : data.gouv.fr",
                 href="https://www.data.gouv.fr/fr/datasets/641b456a5374b1bdc9dce4cf",
                 target="_blank",
                 class_="text-muted small",
@@ -193,20 +288,11 @@ app_ui = ui.page_sidebar(
         open="open",
         width="300px",
     ),
-    ui.head_content(
-        ui.tags.style("""
-            html, body, .bslib-page-fill { overflow-y: auto !important; height: auto !important; }
-            .card.bslib-card .card-body { display: flex; flex-direction: column; }
-            .card.bslib-card .card-body > .shiny-html-output { flex: 1; display: flex; flex-direction: column; min-height: 400px; }
-            .card.bslib-card .card-body > .shiny-html-output > iframe { flex: 1; }
-            .bslib-card .bslib-full-screen-enter { opacity: 0.4 !important; transition: opacity 0.2s; }
-            .bslib-card:hover .bslib-full-screen-enter { opacity: 1 !important; }
-        """),
-    ),
+    ui.head_content(ui.tags.style(CUSTOM_CSS)),
     ui.output_ui("main_content"),
-    title=ui.TagList(icon_svg("train"), " Dashboard Trains Supprimés"),
+    title=ui.TagList(icon_svg("train"), " Trains Supprimés"),
     fillable=False,
-    theme=shinyswatch.theme.flatly,
+    theme=shinyswatch.theme.lux,
 )
 
 
@@ -225,10 +311,8 @@ def server(input, output, session):
         d = load_data()
         if d.empty:
             return d
-
         if input.type_train():
             d = d[d["type_court"] == input.type_train()]
-
         start, end = input.date_range()
         if not start or not end:
             start, end = pd.Timestamp("2024-01-01"), pd.Timestamp.today()
@@ -245,7 +329,7 @@ def server(input, output, session):
         _cache["ts"] = 0
         ui.notification_show("Données rafraîchies !", type="message", duration=3)
 
-    # ── Charts (pyecharts) ────────────────────────────────────────────
+    # ── Charts ────────────────────────────────────────────────────────
 
     @render.ui
     def bar_chart():
@@ -254,14 +338,16 @@ def server(input, output, session):
             return empty_chart()
         counts = df["type_court"].value_counts()
         bar = (
-            Bar(init_opts=opts.InitOpts(width="100%", height="375px"))
+            Bar(init_opts=chart_init())
             .add_xaxis(counts.index.tolist())
-            .add_yaxis("Suppressions", counts.values.tolist(),
-                        itemstyle_opts=opts.ItemStyleOpts(color="#2c7fb8"))
+            .add_yaxis(
+                "Suppressions", counts.values.tolist(),
+                itemstyle_opts=opts.ItemStyleOpts(color=C_BLUE),
+            )
             .set_global_opts(
-                title_opts=opts.TitleOpts(title="Suppressions par type"),
-                xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=30)),
-                tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                xaxis_opts=xaxis_opts(rotate=30),
+                yaxis_opts=yaxis_opts(),
+                tooltip_opts=chart_tooltip(),
                 legend_opts=opts.LegendOpts(is_show=False),
             )
         )
@@ -287,32 +373,31 @@ def server(input, output, session):
             .reset_index()
         )
 
-        with open("france.geo.json", "r", encoding="utf-8") as f:
-            france_geo = json.load(f)
-
-        geo = Geo(init_opts=opts.InitOpts(width="100%", height="375px"))
-        geo.add_js_funcs(f"echarts.registerMap('France',{json.dumps(france_geo)})")
+        geo = Geo(init_opts=chart_init())
+        geo.add_js_funcs(f"echarts.registerMap('France',{json.dumps(FRANCE_GEOJSON)})")
         geo.add_schema(
             maptype="France",
-            itemstyle_opts=opts.ItemStyleOpts(color="#f5f5f5", border_color="#bbb"),
+            itemstyle_opts=opts.ItemStyleOpts(color="#EEF2FF", border_color="#C7D2FE"),
             emphasis_label_opts=opts.LabelOpts(is_show=True),
         )
         for _, row in data_map.iterrows():
             geo.add_coordinate(row["nom"], row["lon"], row["lat"])
         geo.add(
             series_name="Suppressions",
-            data_pair=[(row["nom"], row["count"]) for _, row in data_map.iterrows()],
+            data_pair=list(zip(data_map["nom"], data_map["count"])),
             type_="effectScatter",
             symbol_size=8,
-            label_opts=opts.LabelOpts(formatter="{b}", position="right", is_show=False),
+            label_opts=opts.LabelOpts(is_show=False),
         )
         geo.set_series_opts(effect_opts=opts.EffectOpts(scale=4))
         geo.set_global_opts(
-            title_opts=opts.TitleOpts(title="Suppressions en France"),
             visualmap_opts=opts.VisualMapOpts(
-                max_=int(data_map["count"].max()), is_piecewise=True
+                max_=int(data_map["count"].max()),
+                is_piecewise=True,
+                textstyle_opts=opts.TextStyleOpts(color="#4A5568"),
             ),
             legend_opts=opts.LegendOpts(is_show=False),
+            tooltip_opts=chart_tooltip(trigger="item"),
         )
         return echarts_iframe(geo)
 
@@ -323,17 +408,20 @@ def server(input, output, session):
             return empty_chart()
         top = df["departure"].value_counts().head(10)
         pie = (
-            Pie(init_opts=opts.InitOpts(width="100%", height="375px"))
+            Pie(init_opts=chart_init())
             .add(
                 "Gares",
                 [list(z) for z in zip(top.index.tolist(), top.values.tolist())],
-                radius=["40%", "70%"],
+                radius=["42%", "72%"],
+                label_opts=opts.LabelOpts(formatter="{b}: {d}%", font_size=11),
             )
+            .set_colors(C_PIE)
             .set_global_opts(
-                title_opts=opts.TitleOpts(title="Top 10 gares de départ"),
                 legend_opts=opts.LegendOpts(
-                    orient="vertical", pos_top="top", pos_right="0%"
+                    orient="vertical", pos_top="top", pos_right="0%",
+                    textstyle_opts=opts.TextStyleOpts(color="#4A5568", font_size=11),
                 ),
+                tooltip_opts=chart_tooltip(trigger="item"),
             )
         )
         return echarts_iframe(pie)
@@ -350,21 +438,22 @@ def server(input, output, session):
         )
         monthly["month"] = monthly["departure_date_dt"].dt.strftime("%m/%Y")
         line = (
-            Line(init_opts=opts.InitOpts(width="100%", height="375px"))
+            Line(init_opts=chart_init())
             .add_xaxis(monthly["month"].tolist())
             .add_yaxis(
                 "Suppressions",
                 monthly["count"].tolist(),
                 is_smooth=True,
-                areastyle_opts=opts.AreaStyleOpts(opacity=0.15),
+                color=C_BLUE,
+                linestyle_opts=opts.LineStyleOpts(width=2.5, color=C_BLUE),
+                areastyle_opts=opts.AreaStyleOpts(opacity=0.12, color=C_BLUE),
+                itemstyle_opts=opts.ItemStyleOpts(color=C_BLUE),
             )
             .set_global_opts(
-                title_opts=opts.TitleOpts(title="Évolution mensuelle"),
-                xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=45)),
-                tooltip_opts=opts.TooltipOpts(trigger="axis"),
-                legend_opts=opts.LegendOpts(
-                    orient="vertical", pos_top="top", pos_right="0%"
-                ),
+                xaxis_opts=xaxis_opts(rotate=45),
+                yaxis_opts=yaxis_opts(),
+                tooltip_opts=chart_tooltip(),
+                legend_opts=opts.LegendOpts(is_show=False),
             )
         )
         return echarts_iframe(line)
@@ -374,20 +463,19 @@ def server(input, output, session):
         df = filtered_data()
         if df.empty or "departure_time_fmt" not in df.columns:
             return empty_chart()
-        df_h = df.copy()
-        df_h["heure"] = pd.to_datetime(
-            df_h["departure_time_fmt"], format="%H:%M", errors="coerce"
-        ).dt.hour
-        counts = df_h["heure"].value_counts().sort_index()
+        hours = pd.to_datetime(df["departure_time_fmt"], format="%H:%M", errors="coerce").dt.hour
+        counts = hours.value_counts().sort_index()
         bar = (
-            Bar(init_opts=opts.InitOpts(width="100%", height="375px"))
+            Bar(init_opts=chart_init())
             .add_xaxis([f"{h:02d}h" for h in counts.index])
-            .add_yaxis("Suppressions", counts.values.tolist(),
-                        itemstyle_opts=opts.ItemStyleOpts(color="#41b6c4"))
+            .add_yaxis(
+                "Suppressions", counts.values.tolist(),
+                itemstyle_opts=opts.ItemStyleOpts(color=C_TEAL),
+            )
             .set_global_opts(
-                title_opts=opts.TitleOpts(title="Suppressions par heure"),
-                xaxis_opts=opts.AxisOpts(axislabel_opts=opts.LabelOpts(rotate=0)),
-                tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                xaxis_opts=xaxis_opts(),
+                yaxis_opts=yaxis_opts(),
+                tooltip_opts=chart_tooltip(),
                 legend_opts=opts.LegendOpts(is_show=False),
             )
         )
@@ -400,7 +488,7 @@ def server(input, output, session):
         count = filtered_data().shape[0]
         return ui.value_box(
             "Trains supprimés",
-            f"{count:,}".replace(",", " "),
+            f"{count:,}".replace(",", " "),
             showcase=icon_svg("train"),
             theme="primary",
         )
@@ -410,7 +498,7 @@ def server(input, output, session):
         df = filtered_data()
         if df.empty:
             return ui.value_box(
-                "Gare la + impactée", "-",
+                "Gare la + impactée", "—",
                 showcase=icon_svg("location-dot"), theme="info",
             )
         top = df["departure"].value_counts()
@@ -437,10 +525,10 @@ def server(input, output, session):
     @render.ui
     def kpi_moyenne():
         df = filtered_data()
-        if df.empty:
-            val = "-"
-        else:
-            val = f"{round(df.groupby('departure_date_dt').size().mean(), 1):,}".replace(",", " ")
+        val = (
+            "—" if df.empty
+            else f"{round(df.groupby('departure_date_dt').size().mean(), 1):,}".replace(",", " ")
+        )
         return ui.value_box(
             "Moyenne / jour",
             str(val),
@@ -464,9 +552,7 @@ def server(input, output, session):
     def download_csv():
         df = filtered_data()
         buf = io.BytesIO()
-        buf.write(
-            df.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-        )
+        buf.write(df.to_csv(index=False, sep=";").encode("utf-8-sig"))
         buf.seek(0)
         return buf
 
@@ -491,12 +577,12 @@ def server(input, output, session):
                     kpi_row,
                     ui.row(
                         ui.column(6, ui.card(
-                            ui.card_header("Par type de train"),
+                            card_icon_header("train", "Par type de train"),
                             ui.output_ui("bar_chart"),
                             full_screen=True,
                         )),
                         ui.column(6, ui.card(
-                            ui.card_header("Carte des suppressions"),
+                            card_icon_header("map", "Carte des suppressions"),
                             ui.output_ui("map_france"),
                             full_screen=True,
                         )),
@@ -504,12 +590,12 @@ def server(input, output, session):
                     ),
                     ui.row(
                         ui.column(6, ui.card(
-                            ui.card_header("Répartition horaire"),
+                            card_icon_header("clock", "Répartition horaire"),
                             ui.output_ui("histo_heure"),
                             full_screen=True,
                         )),
                         ui.column(6, ui.card(
-                            ui.card_header("Détail des trains"),
+                            card_icon_header("table", "Détail des trains"),
                             ui.output_data_frame("table_jour"),
                         )),
                     ),
@@ -525,12 +611,12 @@ def server(input, output, session):
                     kpi_row,
                     ui.row(
                         ui.column(6, ui.card(
-                            ui.card_header("Par type de train"),
+                            card_icon_header("train", "Par type de train"),
                             ui.output_ui("bar_chart"),
                             full_screen=True,
                         )),
                         ui.column(6, ui.card(
-                            ui.card_header("Top 10 gares de départ"),
+                            card_icon_header("chart-pie", "Top 10 gares de départ"),
                             ui.output_ui("pie_chart"),
                             full_screen=True,
                         )),
@@ -538,12 +624,12 @@ def server(input, output, session):
                     ),
                     ui.row(
                         ui.column(6, ui.card(
-                            ui.card_header("Tendance mensuelle"),
+                            card_icon_header("chart-line", "Tendance mensuelle"),
                             ui.output_ui("line_chart"),
                             full_screen=True,
                         )),
                         ui.column(6, ui.card(
-                            ui.card_header("Répartition horaire"),
+                            card_icon_header("clock", "Répartition horaire"),
                             ui.output_ui("histo_heure"),
                             full_screen=True,
                         )),
@@ -554,10 +640,14 @@ def server(input, output, session):
             return ui.card(
                 ui.card_header(
                     ui.div(
-                        ui.span("Tableau filtré", class_="fw-bold fs-5"),
+                        ui.span(
+                            icon_svg("table", width="14px"),
+                            " ",
+                            ui.span("Tableau filtré", class_="fw-bold fs-5"),
+                        ),
                         ui.download_button(
                             "download_csv",
-                            "Exporter CSV",
+                            ui.TagList(icon_svg("download", width="12px"), " Exporter CSV"),
                             class_="btn btn-sm btn-outline-primary",
                         ),
                         class_="d-flex align-items-center justify-content-between w-100",
@@ -587,10 +677,7 @@ def server(input, output, session):
             cls += "btn-primary" if is_active else "btn-outline-secondary"
             buttons.append(
                 ui.input_action_button(
-                    f"special_{key}",
-                    label,
-                    class_=cls,
-                    disabled=is_disabled,
+                    f"special_{key}", label, class_=cls, disabled=is_disabled,
                 )
             )
         return ui.div(*buttons, class_="d-flex justify-content-center mb-2")
@@ -605,9 +692,7 @@ def server(input, output, session):
             is_active = selected_period.get() == y
             cls = "btn btn-sm me-1 mb-1 "
             cls += "btn-primary" if is_active else "btn-outline-secondary"
-            buttons.append(
-                ui.input_action_button(f"year_{y}", str(y), class_=cls)
-            )
+            buttons.append(ui.input_action_button(f"year_{y}", str(y), class_=cls))
         return ui.div(*buttons, class_="d-flex justify-content-center flex-wrap")
 
     # ── Year observers ────────────────────────────────────────────────
@@ -624,10 +709,7 @@ def server(input, output, session):
                 else f"{year}-12-31"
             )
             ui.update_date_range(
-                "date_range",
-                start=f"{year}-01-01",
-                end=end_date,
-                session=session,
+                "date_range", start=f"{year}-01-01", end=end_date, session=session,
             )
 
     if not data.empty:
